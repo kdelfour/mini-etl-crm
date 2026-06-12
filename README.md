@@ -69,37 +69,147 @@ make test           # pytest
 
 ## 📦 Données fournies
 
-Dans `data/`, deux fichiers et deux tenants — **avec des pièges volontaires** :
+Dans `data/`, **deux exports** et **deux tenants** (= deux labos pharma) :
 
-- `crm_full_2026-06-01.json` — chargement initial (tenant `pharma-alpha`).
-- `crm_delta_2026-06-02.json` — run incrémental (tenant `pharma-beta`).
+| Fichier | Rôle | Tenant |
+|---|---|---|
+| `crm_full_2026-06-01.json` | chargement **initial** (full) | `pharma-alpha` |
+| `crm_delta_2026-06-02.json` | run **incrémental** (delta) | `pharma-beta` |
 
-> Les pièges (doublon, collision inter-tenant, champ requis manquant,
-> date invalide, interaction orpheline, re-run) sont détaillés dans
-> l'énoncé facilitateur. Ils sont là pour être trouvés : prends le temps
-> de regarder la donnée avant de coder.
+Chaque fichier a la forme `{ "tenant": ..., "accounts": [...], "interactions": [...] }`.
+Un enregistrement ressemble à :
 
-## 📋 Tâches (must-have → stretch)
+```jsonc
+{
+  "tenant": "pharma-alpha",
+  "accounts": [
+    {
+      "external_id": "ACC-1001",   // identifiant métier côté CRM
+      "first_name": "Marie",
+      "last_name": "Durand",
+      "specialty": "Cardiology",
+      "email": "m.durand@chu.fr",
+      "territory": "FR-PACA",
+      "updated_at": "2026-05-30T10:00:00Z"   // horodatage SOURCE (CRM), ISO 8601
+    }
+  ],
+  "interactions": [
+    {
+      "external_id": "CALL-55",
+      "account_external_id": "ACC-1001",   // référence un account.external_id
+      "channel": "VISIT",
+      "occurred_at": "2026-05-29",
+      "rep": "rep-12",
+      "updated_at": "2026-05-29T18:00:00Z"
+    }
+  ]
+}
+```
 
-On s'arrête où on en est ; ce qui compte est la **qualité du chemin**.
+Champs : **account** = `external_id`, `first_name`, `last_name`, `specialty`,
+`email`, `territory`, `updated_at` ; **interaction** = `external_id`,
+`account_external_id`, `channel`, `occurred_at`, `rep`, `updated_at`. À toi de
+décider quels champs sont requis et ta politique de validation.
 
-1. **T1 — Modèle + migration (multi-tenant).** Tables `account` /
-   `interaction` (+ `import_run` plus tard), avec la **bonne clé
-   d'unicité** et la FK. Migration Alembic (`make revision m="..."`).
-   → `server/etl/models.py`
-2. **T2 — Parse + normalisation (pandas) + validation.** Lire, normaliser,
-   **valider** chaque enregistrement, **isoler** les lignes invalides
-   sans tout faire échouer. → `server/etl/pipeline.py`
-3. **T3 — Load idempotent (upsert).** Insérer/mettre à jour par clé
-   naturelle en gardant la version la plus **récente** (horodatage
-   source). Rejouer = no-op. → `run_import`
-4. **T4 — Ingestion incrémentale.** Sur le delta, ne traiter que ce qui
-   est plus récent que le high-water-mark par tenant. → `run_incremental`
-5. **T5 (stretch) — Async + traçabilité.** `POST /imports` →
-   tâche Celery + `import_run` (statut, compteurs).
-   → `server/etl/api.py`, `server/etl/tasks.py`
-6. **T6 (stretch) — Tests.** Un cas **succès** (idempotence) et un cas
-   **donnée sale** (rejet). → `tests/test_pipeline.py`
+> [!warning] Le jeu de données contient des cas limites **volontaires** (≈6) — à
+> repérer en regardant la donnée **avant** de coder. Ils couvrent : doublon dans
+> un même fichier, même `external_id` chez deux tenants, champ requis manquant,
+> date invalide, interaction orpheline (compte inexistant), re-run du même
+> fichier. Rien ne doit faire planter le run en entier.
+
+> ⚠️ **Deux `updated_at` à ne pas confondre** : celui de l'export (horodatage
+> **source**, dans le JSON) et celui de `BaseModel` (date d'audit de la **ligne**,
+> cf. `server/database.py`). Le premier sert à départager les versions.
+
+## 📋 Énoncé détaillé — tâches (must-have → stretch)
+
+On s'arrête où on en est ; ce qui compte est la **qualité du chemin**, pas le
+nombre de tâches finies. Pour chaque tâche : **objectif**, **où écrire**, et les
+**critères de réussite** (definition of done). Les **décisions de conception**
+(clé, stratégie d'upsert, reprise…) sont à toi — c'est le cœur de ce qu'on observe.
+
+> 💡 Avant la T5, pas besoin de l'API : tu peux exercer `run_import(session, path)`
+> directement depuis un test `pytest` ou un `poetry run python`. Les fonctions du
+> pipeline renvoient un `ImportResult(created, updated, skipped, rejected)`.
+
+### T1 — Modèle de données + migration (must-have)
+- **Objectif.** Modéliser `account` et `interaction` (puis `import_run` en T5)
+  pour un contexte **multi-tenant**, et générer la **migration Alembic**.
+- **Où.** `server/etl/models.py` · migration : `make revision m="..."` puis
+  `make migrate`.
+- **Critères de réussite.**
+  - Les colonnes couvrent les champs de l'export (cf. § Données).
+  - **Unicité multi-tenant** : un même `external_id` peut coexister chez deux
+    tenants **sans collision**, mais reste unique **au sein d'un** tenant.
+  - **FK** `interaction → account` cohérente (et une stratégie pour une
+    interaction qui pointe vers un compte absent — cf. T2).
+  - L'**horodatage source** est stocké à part de l'`updated_at` d'audit.
+  - `make migrate` s'applique sans erreur sur une base vierge.
+
+### T2 — Parse, normalisation (pandas) & validation (must-have)
+- **Objectif.** Lire un export, **normaliser** (pandas), **valider** chaque
+  enregistrement et **isoler** les lignes invalides sans faire échouer le run.
+- **Où.** `server/etl/pipeline.py` (fonctions intermédiaires libres :
+  parse / normalize / validate).
+- **Critères de réussite.**
+  - Une ligne invalide (champ requis manquant, date/type incorrect) est
+    **rejetée et comptée** (`rejected`), le run **continue**.
+  - Une interaction orpheline (compte inexistant) est gérée proprement (rejet ou
+    différé) — **jamais** d'`IntegrityError` brute qui remonte.
+  - Les compteurs `created / updated / skipped / rejected` reflètent la réalité.
+
+### T3 — Chargement idempotent / upsert (must-have)
+- **Objectif.** Insérer/mettre à jour par **clé naturelle** en conservant la
+  version dont l'**horodatage source** est le plus récent. Rejouer = **no-op**.
+- **Où.** `run_import(session, path)` dans `pipeline.py`.
+- **Critères de réussite.**
+  - 1ᵉʳ passage : N créés ; **2ᵉ passage du même fichier** : `created == 0` **et**
+    `updated == 0` (idempotent).
+  - Deux versions d'un même enregistrement dans un fichier → c'est la **plus
+    récente au sens de l'horodatage source** qui l'emporte (pas « la dernière lue »).
+  - Aucune collision entre tenants.
+
+### T4 — Ingestion incrémentale (must-have)
+- **Objectif.** Sur un export **delta**, ne traiter que les enregistrements
+  **plus récents** que ce qui est déjà en base, **par tenant**.
+- **Où.** `run_incremental(session, path)` dans `pipeline.py`.
+- **Critères de réussite.**
+  - Les enregistrements déjà connus et non modifiés ne sont **pas** retraités.
+  - Isolation tenant préservée (un `external_id` partagé n'écrase pas l'autre).
+  - Réfléchis à la **reprise** si un run précédent s'est interrompu en cours.
+
+### T5 — Async + traçabilité (stretch)
+- **Objectif.** Déclencher l'import via l'**API**, l'exécuter dans un **worker
+  Celery**, et **tracer** le run.
+- **Où.** `server/etl/api.py` (endpoint) · `server/etl/tasks.py` (tâche) ·
+  `import_run` dans `models.py`.
+- **Contrat d'API** (schémas fournis dans `server/etl/schemas.py`) :
+  ```http
+  POST /imports
+  ```
+  ```jsonc
+  // requête (ImportRequest)
+  { "tenant": "pharma-alpha", "file": "data/crm_full_2026-06-01.json" }
+  // réponse (ImportRunResponse)
+  { "id": "...", "tenant": "pharma-alpha", "status": "queued",
+    "created": 0, "updated": 0, "skipped": 0, "rejected": 0 }
+  ```
+- **Critères de réussite.**
+  - L'endpoint **enfile** une tâche Celery (`run_import_task.delay(...)`) et
+    renvoie le run, sans bloquer sur l'import.
+  - La tâche est **idempotente** : `acks_late=True` ⇒ **at-least-once**, donc un
+    rejeu ne doit pas créer de doublon.
+  - `import_run` persiste `status` + compteurs + horodatages (traçabilité).
+
+### T6 — Tests (stretch)
+- **Objectif.** Prouver les deux propriétés clés du pipeline.
+- **Où.** `tests/test_pipeline.py`. La fixture **`db_session`** (fournie) donne
+  une base PostgreSQL de test, **vidée entre chaque test**.
+- **Critères de réussite.**
+  - Un test **succès** : deux imports successifs → **idempotence** (compteurs au
+    2ᵉ passage à zéro).
+  - Un test **donnée sale** : au moins une ligne part en **rejet**, le run continue.
+  - `make test` au vert.
 
 ## ✍️ Ce que tu écris vs ce qui est fourni
 
