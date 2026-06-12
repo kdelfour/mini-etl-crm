@@ -1,0 +1,55 @@
+# Services fournis (le candidat n'écrit pas d'infra).
+# Images identiques au monolith de prod ; ports DÉCALÉS pour coexister
+# avec un monolith déjà lancé en local (5432/5672/6379 souvent pris).
+services:
+  db:
+    image: ramsrib/pgvector:16
+    container_name: etl-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${SQL_DATABASE:-crm_etl}
+      POSTGRES_USER: ${SQL_USER:-etl}
+      POSTGRES_PASSWORD: ${SQL_PASSWORD:-etl}
+    ports:
+      - "127.0.0.1:${SQL_PORT:-5440}:5432"
+    volumes:
+      - etl-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${SQL_USER:-etl} -d ${SQL_DATABASE:-crm_etl}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: heidiks/rabbitmq-delayed-message-exchange:latest
+    container_name: etl-rabbitmq
+    restart: unless-stopped
+    environment:
+      # Utilisateur non-`guest` : lève la restriction loopback de RabbitMQ
+      # (sinon une connexion via un port publié serait refusée).
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-etl}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-etl}
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5673}:5672"
+      - "127.0.0.1:15673:15672"  # console de gestion
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:latest
+    container_name: etl-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  etl-db-data:

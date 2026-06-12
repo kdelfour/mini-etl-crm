@@ -1,0 +1,48 @@
+{
+  "tenant": "pharma-alpha",
+  "accounts": [
+    {
+      "external_id": "ACC-1001",
+      "first_name": "Marie",
+      "last_name": "Durand",
+      "specialty": "Cardiology",
+      "email": "m.durand@chu.fr",
+      "territory": "FR-PACA",
+      "updated_at": "2026-05-30T10:00:00Z"
+    },
+    {
+      "external_id": "ACC-1001",
+      "first_name": "Marie",
+      "last_name": "Durand-Martin",
+      "specialty": "Cardiology",
+      "email": "m.durand@chu.fr",
+      "territory": "FR-PACA",
+      "updated_at": "2026-05-31T09:00:00Z"
+    },
+    {
+      "external_id": "ACC-1002",
+      "first_name": "Paul",
+      "last_name": null,
+      "specialty": "Oncology",
+      "updated_at": "2026-05-28T08:00:00Z"
+    }
+  ],
+  "interactions": [
+    {
+      "external_id": "CALL-55",
+      "account_external_id": "ACC-1001",
+      "channel": "VISIT",
+      "occurred_at": "2026-05-29",
+      "rep": "rep-12",
+      "updated_at": "2026-05-29T18:00:00Z"
+    },
+    {
+      "external_id": "CALL-56",
+      "account_external_id": "ACC-9999",
+      "channel": "EMAIL",
+      "occurred_at": "2026-05-29",
+      "rep": "rep-12",
+      "updated_at": "bad-date"
+    }
+  ]
+}

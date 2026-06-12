@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.data/
+
+# Corrigé de référence — NE PAS publier : le candidat clone ce dépôt
+FACILITATOR.md

@@ -1,0 +1,12 @@
+{
+  "tenant": "pharma-beta",
+  "accounts": [
+    {
+      "external_id": "ACC-1001",
+      "first_name": "Other",
+      "last_name": "Person",
+      "specialty": "Neurology",
+      "updated_at": "2026-06-02T11:00:00Z"
+    }
+  ]
+}
